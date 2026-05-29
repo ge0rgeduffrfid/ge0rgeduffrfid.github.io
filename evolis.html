@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evolis Card Colour Matcher</title>
+
+<style>
+body{
+    font-family:Arial,sans-serif;
+    background:#222;
+    color:white;
+    margin:20px;
+    text-align:center;
+}
+
+.controls{
+    margin-bottom:20px;
+}
+
+button,input{
+    margin:5px;
+    padding:10px;
+}
+
+#preview{
+    width:270px;
+    border:2px solid #fff;
+    background:white;
+}
+
+#info{
+    margin-top:10px;
+    font-size:18px;
+}
+
+@media print{
+    body>*:not(#printArea){
+        display:none !important;
+    }
+
+    #printArea{
+        display:block !important;
+    }
+
+    #preview{
+        width:54mm !important;
+        height:86mm !important;
+        border:none !important;
+    }
+
+    @page{
+        size:54mm 86mm;
+        margin:0;
+    }
+}
+</style>
+</head>
+<body>
+
+<h2>Evolis Colour Matcher</h2>
+
+<div class="controls">
+    <input type="file" id="upload" accept="image/*">
+
+    <button id="prev">Previous</button>
+    <button id="next">Next</button>
+    <button id="refine">Refine Around Current</button>
+    <button id="save">Save PNG</button>
+    <button onclick="window.print()">Print Current</button>
+</div>
+
+<div id="info">Upload an image</div>
+
+<div id="printArea">
+    <canvas id="preview"></canvas>
+</div>
+
+<script>
+
+const CARD_W = 638;
+const CARD_H = 1016;
+
+let variants = [];
+let currentVariant = 0;
+let img = null;
+
+function buildInitialVariants(){
+
+    variants = [
+
+        {h:-8,s:-25,b:-12},
+        {h:-6,s:-20,b:-10},
+        {h:-4,s:-15,b:-8},
+        {h:-2,s:-10,b:-4},
+
+        {h:0,s:0,b:0},
+
+        {h:2,s:-10,b:-4},
+        {h:4,s:-15,b:-8},
+        {h:6,s:-20,b:-10},
+        {h:8,s:-25,b:-12}
+
+    ];
+
+    currentVariant = 4;
+
+}
+
+function refineAroundCurrent(){
+
+    const base = variants[currentVariant];
+
+    const newVariants = [];
+
+    for(let h=-2;h<=2;h++){
+        for(let s=-4;s<=4;s+=2){
+            for(let b=-2;b<=2;b+=2){
+
+                newVariants.push({
+                    h:base.h+h,
+                    s:base.s+s,
+                    b:base.b+b
+                });
+
+            }
+        }
+    }
+
+    variants = newVariants;
+    currentVariant = Math.floor(variants.length/2);
+
+    render();
+
+}
+
+function render(){
+
+    if(!img) return;
+
+    const canvas =
+        document.getElementById("preview");
+
+    canvas.width = CARD_W;
+    canvas.height = CARD_H;
+
+    const ctx =
+        canvas.getContext("2d");
+
+    ctx.clearRect(0,0,CARD_W,CARD_H);
+
+    ctx.drawImage(
+        img,
+        0,
+        0,
+        CARD_W,
+        CARD_H
+    );
+
+    const imageData =
+        ctx.getImageData(
+            0,
+            0,
+            CARD_W,
+            CARD_H
+        );
+
+    applyAdjustment(
+        imageData.data,
+        variants[currentVariant]
+    );
+
+    ctx.putImageData(
+        imageData,
+        0,
+        0
+    );
+
+    const v = variants[currentVariant];
+
+    document.getElementById("info").innerHTML =
+        `Variant ${currentVariant+1} of ${variants.length}
+        | Hue ${v.h}
+        | Saturation ${v.s}
+        | Brightness ${v.b}`;
+
+}
+
+function applyAdjustment(data,v){
+
+    for(let i=0;i<data.length;i+=4){
+
+        let r=data[i];
+        let g=data[i+1];
+        let b=data[i+2];
+
+        let hsl=rgbToHsl(r,g,b);
+
+        hsl.h += v.h;
+
+        hsl.s += v.s/100;
+        hsl.l += v.b/100;
+
+        hsl.s = Math.max(0,Math.min(1,hsl.s));
+        hsl.l = Math.max(0,Math.min(1,hsl.l));
+
+        const rgb =
+            hslToRgb(
+                hsl.h,
+                hsl.s,
+                hsl.l
+            );
+
+        data[i]=rgb.r;
+        data[i+1]=rgb.g;
+        data[i+2]=rgb.b;
+
+    }
+
+}
+
+function rgbToHsl(r,g,b){
+
+    r/=255;
+    g/=255;
+    b/=255;
+
+    const max=Math.max(r,g,b);
+    const min=Math.min(r,g,b);
+
+    let h,s,l=(max+min)/2;
+
+    if(max===min){
+
+        h=s=0;
+
+    }else{
+
+        const d=max-min;
+
+        s=l>0.5
+            ? d/(2-max-min)
+            : d/(max+min);
+
+        switch(max){
+
+            case r:
+                h=(g-b)/d+(g<b?6:0);
+                break;
+
+            case g:
+                h=(b-r)/d+2;
+                break;
+
+            case b:
+                h=(r-g)/d+4;
+                break;
+
+        }
+
+        h*=60;
+
+    }
+
+    return {h,s,l};
+
+}
+
+function hslToRgb(h,s,l){
+
+    h=((h%360)+360)%360;
+
+    let c=
+        (1-Math.abs(2*l-1))*s;
+
+    let x=
+        c*(1-Math.abs((h/60)%2-1));
+
+    let m=l-c/2;
+
+    let r=0,g=0,b=0;
+
+    if(h<60){
+        r=c;g=x;b=0;
+    }
+    else if(h<120){
+        r=x;g=c;b=0;
+    }
+    else if(h<180){
+        r=0;g=c;b=x;
+    }
+    else if(h<240){
+        r=0;g=x;b=c;
+    }
+    else if(h<300){
+        r=x;g=0;b=c;
+    }
+    else{
+        r=c;g=0;b=x;
+    }
+
+    return{
+        r:Math.round((r+m)*255),
+        g:Math.round((g+m)*255),
+        b:Math.round((b+m)*255)
+    };
+
+}
+
+document
+.getElementById("upload")
+.addEventListener(
+    "change",
+    e=>{
+
+        const file =
+            e.target.files[0];
+
+        if(!file) return;
+
+        const reader =
+            new FileReader();
+
+        reader.onload=function(ev){
+
+            img=new Image();
+
+            img.onload=function(){
+
+                buildInitialVariants();
+                render();
+
+            };
+
+            img.src=ev.target.result;
+
+        };
+
+        reader.readAsDataURL(file);
+
+    }
+);
+
+document
+.getElementById("prev")
+.onclick=()=>{
+
+    if(currentVariant>0){
+
+        currentVariant--;
+        render();
+
+    }
+
+};
+
+document
+.getElementById("next")
+.onclick=()=>{
+
+    if(currentVariant<variants.length-1){
+
+        currentVariant++;
+        render();
+
+    }
+
+};
+
+document
+.getElementById("refine")
+.onclick=refineAroundCurrent;
+
+document
+.getElementById("save")
+.onclick=()=>{
+
+    const link =
+        document.createElement("a");
+
+    link.download =
+        "evolis-matched.png";
+
+    link.href =
+        document
+        .getElementById("preview")
+        .toDataURL("image/png");
+
+    link.click();
+
+};
+
+</script>
+
+</body>
+</html>
